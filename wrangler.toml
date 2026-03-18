@@ -4,3 +4,7 @@ compatibility_date = "2026-03-17"
 
 [vars]
 PROXY_BASE = "https://testing01.michaeljawagner.workers.dev/?url="
+
+[[kv_namespaces]]
+binding = "MARCH_DB"
+id = "8fab30b6e3d845fea3c94a269721e31f"
