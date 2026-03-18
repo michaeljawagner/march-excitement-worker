@@ -19,9 +19,16 @@ export default {
     }
 
     if (url.pathname === "/run") {
-      await runSnapshotJob(env);
-      return json({ ok: true, ran: true });
-    }
+  try {
+    await runSnapshotJob(env);
+    return json({ ok: true, ran: true });
+  } catch (err) {
+    return json({
+      ok: false,
+      error: err?.message || String(err)
+    }, 500);
+  }
+}
 
     if (url.pathname === "/summary") {
       const gameId = String(url.searchParams.get("gameId") || "").trim();
