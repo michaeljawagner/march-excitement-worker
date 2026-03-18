@@ -82,7 +82,14 @@ async function fetchEspnGames(env, scoreboardDate) {
     "?dates=" + scoreboardDate +
     "&groups=50&limit=365";
 
-  const data = await fetchWithProxy(env, url);
+  let data;
+  try {
+    data = await fetchWithProxy(env, url);
+  } catch (err) {
+    console.log("Skipping scoreboard date", scoreboardDate, "-", err?.message || err);
+    return [];
+  }
+
   const events = Array.isArray(data?.events) ? data.events : [];
 
   return events
@@ -362,14 +369,17 @@ async function fetchMarketForGame(env, gameInfo) {
 async function fetchWithProxy(env, url) {
   const proxyBase = String(env.PROXY_BASE || "");
   if (!proxyBase) throw new Error("Missing PROXY_BASE");
+
   const res = await fetch(proxyBase + encodeURIComponent(url));
-  if (!res.ok) throw new Error("Fetch failed: " + res.status);
+  if (!res.ok) {
+    throw new Error("Fetch failed: " + res.status + " for " + url);
+  }
 
   const text = await res.text();
   try {
     return JSON.parse(text);
   } catch {
-    throw new Error("Invalid JSON response");
+    throw new Error("Invalid JSON response for " + url);
   }
 }
 
