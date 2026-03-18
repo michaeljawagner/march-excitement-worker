@@ -3,11 +3,24 @@ export default {
     ctx.waitUntil(runSnapshotJob(env));
   },
 
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
+    if (request.method === "OPTIONS") {
+      return new Response(null, { headers: corsHeaders() });
+    }
+
     if (url.pathname === "/health") {
-      return json({ ok: true });
+      return json({
+        ok: true,
+        hasKV: !!env.MARCH_DB,
+        hasProxyBase: !!env.PROXY_BASE
+      });
+    }
+
+    if (url.pathname === "/run") {
+      await runSnapshotJob(env);
+      return json({ ok: true, ran: true });
     }
 
     if (url.pathname === "/summary") {
@@ -35,6 +48,9 @@ export default {
 };
 
 async function runSnapshotJob(env) {
+  if (!env.MARCH_DB) throw new Error("Missing MARCH_DB binding");
+  if (!env.PROXY_BASE) throw new Error("Missing PROXY_BASE var");
+
   const tournamentDates = [
     "20260317","20260318","20260319","20260320","20260321","20260322",
     "20260326","20260327","20260328","20260329","20260404","20260406"
@@ -46,7 +62,6 @@ async function runSnapshotJob(env) {
     for (const game of games) {
       const phase = getGamePhase(game.game);
 
-      // Option A: do not log until game starts
       if (phase === "upcoming") continue;
 
       if (phase === "live") {
@@ -131,7 +146,6 @@ async function logLiveSnapshot(env, gameInfo) {
     ? Number(marketData.history[marketData.history.length - 1].t)
     : Math.floor(Date.now() / 1000);
 
-  // avoid duplicate snapshot writes for same history point
   if (snapshots.length && Number(snapshots[snapshots.length - 1]?.historyTs) === latestTs) {
     return;
   }
@@ -170,14 +184,55 @@ async function finalizeGame(env, gameInfo) {
 
   const histKey = "hist:" + gameInfo.espnId;
   const historyDoc = await env.MARCH_DB.get(histKey, "json");
-  const snapshots = Array.isArray(historyDoc?.snapshots) ? historyDoc.snapshots : [];
+  let snapshots = Array.isArray(historyDoc?.snapshots) ? historyDoc.snapshots : [];
 
   const comp = gameInfo.game?.competitions?.[0];
   const competitors = comp?.competitors || [];
   if (competitors.length < 2) return;
 
-  const finalScoreA = Number(competitors[0]?.score || 0);
-  const finalScoreB = Number(competitors[1]?.score || 0);
+  const t1 = competitors[0];
+  const t2 = competitors[1];
+
+  const finalScoreA = Number(t1?.score || 0);
+  const finalScoreB = Number(t2?.score || 0);
+
+  // Fallback: if no live snapshots were captured, try one last market read
+  if (!snapshots.length) {
+    const marketData = await fetchMarketForGame(env, gameInfo);
+    if (marketData?.history?.length) {
+      snapshots = [{
+        ts: Date.now(),
+        historyTs: Number(marketData.history[marketData.history.length - 1].t) || Math.floor(Date.now() / 1000),
+        status: "final",
+        round: gameInfo.round,
+        scoreboardDate: gameInfo.scoreboardDate,
+        teamA: gameInfo.team1,
+        teamB: gameInfo.team2,
+        scoreA: finalScoreA,
+        scoreB: finalScoreB,
+        probA: Number(marketData.probA),
+        probB: Number(marketData.probB),
+        excitement: getExcitementScoreFromHistory(
+          marketData.history,
+          {
+            seedOrange: getTeamSeedNumber(t1),
+            seedBlue: getTeamSeedNumber(t2)
+          }
+        )
+      }];
+
+      await env.MARCH_DB.put(
+        histKey,
+        JSON.stringify({
+          gameId: gameInfo.espnId,
+          teamA: gameInfo.team1,
+          teamB: gameInfo.team2,
+          round: gameInfo.round,
+          snapshots
+        })
+      );
+    }
+  }
 
   let peakExcitement = 0;
   let totalExcitement = 0;
@@ -305,19 +360,33 @@ async function fetchMarketForGame(env, gameInfo) {
 }
 
 async function fetchWithProxy(env, url) {
-  const res = await fetch(env.PROXY_BASE + encodeURIComponent(url));
+  const proxyBase = String(env.PROXY_BASE || "");
+  if (!proxyBase) throw new Error("Missing PROXY_BASE");
+  const res = await fetch(proxyBase + encodeURIComponent(url));
   if (!res.ok) throw new Error("Fetch failed: " + res.status);
-  return res.json().catch(async () => JSON.parse(await res.text()));
+
+  const text = await res.text();
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Invalid JSON response");
+  }
 }
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: {
-      "content-type": "application/json",
-      "access-control-allow-origin": "*"
-    }
+    headers: corsHeaders()
   });
+}
+
+function corsHeaders() {
+  return {
+    "content-type": "application/json",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,OPTIONS",
+    "access-control-allow-headers": "Content-Type"
+  };
 }
 
 function parseMaybeJson(value) {
