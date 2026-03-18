@@ -1,1 +1,6 @@
+name = "march-excitement-worker"
+main = "src/index.js"
+compatibility_date = "2026-03-17"
 
+[vars]
+PROXY_BASE = "https://testing01.michaeljawagner.workers.dev/?url="
