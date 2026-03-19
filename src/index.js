@@ -50,6 +50,48 @@ export default {
       return json({ ok: true, history });
     }
 
+    if (url.pathname === "/locked-chart" && request.method === "GET") {
+      const gameId = String(url.searchParams.get("gameId") || "").trim();
+      if (!gameId) return json({ ok: false, error: "Missing gameId" }, 400);
+
+      const chart = await env.MARCH_DB.get("locked_chart:" + gameId, "json");
+      if (!chart) return json({ ok: false, error: "Not found" }, 404);
+
+      return json({ ok: true, chart });
+    }
+
+    if (url.pathname === "/locked-chart" && request.method === "POST") {
+      let body;
+      try {
+        body = await request.json();
+      } catch (err) {
+        return json({ ok: false, error: "Invalid JSON body" }, 400);
+      }
+
+      const gameId = String(body?.gameId || "").trim();
+      if (!gameId) return json({ ok: false, error: "Missing gameId" }, 400);
+
+      const lockedHistory = Array.isArray(body?.lockedHistory) ? body.lockedHistory : null;
+      if (!lockedHistory || !lockedHistory.length) {
+        return json({ ok: false, error: "Missing lockedHistory" }, 400);
+      }
+
+      const payload = {
+        gameId,
+        title: body?.title || "",
+        savedAt: Number(body?.savedAt || Date.now()),
+        teamOrange: body?.teamOrange || "",
+        teamBlue: body?.teamBlue || "",
+        excitement: Number.isFinite(Number(body?.excitement)) ? Number(body.excitement) : null,
+        latestHistory: Array.isArray(body?.latestHistory) ? body.latestHistory : null,
+        latestDisplayHistory: Array.isArray(body?.latestDisplayHistory) ? body.latestDisplayHistory : null,
+        lockedHistory
+      };
+
+      await env.MARCH_DB.put("locked_chart:" + gameId, JSON.stringify(payload));
+      return json({ ok: true, saved: true, gameId });
+    }
+
     return json({ ok: false, error: "Not found" }, 404);
   }
 };
