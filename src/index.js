@@ -37,6 +37,9 @@ export default {
       const summary = await env.MARCH_DB.get("summary:" + gameId, "json");
       if (!summary) return json({ ok: false, error: "Not found" }, 404);
 
+      const history = await env.MARCH_DB.get("hist:" + gameId, "json");
+      await ensureLockedChart(env, gameId, summary, history);
+
       return json({ ok: true, summary });
     }
 
@@ -46,6 +49,9 @@ export default {
 
       const history = await env.MARCH_DB.get("hist:" + gameId, "json");
       if (!history) return json({ ok: false, error: "Not found" }, 404);
+
+      const summary = await env.MARCH_DB.get("summary:" + gameId, "json");
+      await ensureLockedChart(env, gameId, summary, history);
 
       return json({ ok: true, history });
     }
@@ -335,6 +341,58 @@ async function finalizeGame(env, gameInfo) {
   };
 
   await env.MARCH_DB.put(summaryKey, JSON.stringify(summary));
+}
+
+async function ensureLockedChart(env, gameId, summary, historyDoc) {
+  if (!env?.MARCH_DB || !gameId) return false;
+
+  const existing = await env.MARCH_DB.get("locked_chart:" + gameId, "json");
+  if (existing?.lockedHistory?.length) return true;
+
+  const snapshots = Array.isArray(historyDoc?.snapshots) ? historyDoc.snapshots : [];
+  if (!snapshots.length) return false;
+
+  const lastSnapshot = snapshots[snapshots.length - 1] || {};
+  const lastProbA = Number(lastSnapshot?.probA);
+  const resolvedByProb = Number.isFinite(lastProbA) && (lastProbA >= 0.999 || lastProbA <= 0.001);
+  const resolvedBySummary = !!summary?.finalized;
+  const resolvedByStatus = String(lastSnapshot?.status || "").toLowerCase() === "final";
+
+  if (!resolvedByProb && !resolvedBySummary && !resolvedByStatus) {
+    return false;
+  }
+
+  const lockedHistory = snapshots
+    .map(function (snap) {
+      return {
+        t: Number(snap?.historyTs || 0),
+        p: Number(snap?.probA)
+      };
+    })
+    .filter(function (point) {
+      return Number.isFinite(point.t) && Number.isFinite(point.p);
+    });
+
+  if (!lockedHistory.length) return false;
+
+  const payload = {
+    gameId: String(gameId),
+    title: historyDoc?.teamA && historyDoc?.teamB
+      ? (String(historyDoc.teamA) + " vs. " + String(historyDoc.teamB))
+      : "",
+    savedAt: Date.now(),
+    teamOrange: historyDoc?.teamA || "",
+    teamBlue: historyDoc?.teamB || "",
+    excitement: Number.isFinite(Number(summary?.finalExcitement))
+      ? Number(summary.finalExcitement)
+      : (Number.isFinite(Number(lastSnapshot?.excitement)) ? Number(lastSnapshot.excitement) : null),
+    latestHistory: lockedHistory,
+    latestDisplayHistory: lockedHistory,
+    lockedHistory
+  };
+
+  await env.MARCH_DB.put("locked_chart:" + gameId, JSON.stringify(payload));
+  return true;
 }
 
 async function fetchMarketForGame(env, gameInfo) {
